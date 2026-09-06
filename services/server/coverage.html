@@ -1,0 +1,295 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>internal: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/charliemcelfresh/envoy-charlie/internal/handlers.go (88.9%)</option>
+				
+				<option value="file1">github.com/charliemcelfresh/envoy-charlie/internal/middlewares.go (33.3%)</option>
+				
+				<option value="file2">github.com/charliemcelfresh/envoy-charlie/internal/server.go (37.5%)</option>
+				
+				<option value="file3">github.com/charliemcelfresh/envoy-charlie/main.go (0.0%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package internal
+
+import (
+        "encoding/json"
+        "log/slog"
+        "net/http"
+)
+
+func (a *app) healthHandler(w http.ResponseWriter, r *http.Request) {
+        <span class="cov8" title="1">m := map[string]string{
+                "status": "ok",
+</span>        }
+        <span class="cov8" title="1">w.Header().Set("Content-Type", "application/json")
+        err := json.NewEncoder(w).Encode(m)
+        if err != nil </span>{
+                <span class="cov0" title="0">a.logger.LogAttrs(
+                        r.Context(), slog.LevelError, "healthHandler error",
+                        slog.String("caller", "internal.healthHandler"),
+                        slog.Any("error", err),
+                )
+</span>        }
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package internal
+
+import (
+        "net/http"
+)
+
+func (a *app) jsonApplicationContentMiddleware(next http.Handler) http.Handler {
+        <span class="cov8" title="1">return http.HandlerFunc(
+                func(w http.ResponseWriter, r *http.Request) </span>{
+                        <span class="cov0" title="0">w.Header().Set("Content-Type", "application/json")
+                        next.ServeHTTP(w, r)
+</span>                },
+        )
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package internal
+
+import (
+        "context"
+        "errors"
+        "log/slog"
+        "net/http"
+        "os/signal"
+        "sync"
+        "syscall"
+        "time"
+)
+
+type app struct {
+        server server
+        logger logger
+        addr   string
+}
+
+type logger interface {
+        LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr)
+}
+
+type server interface {
+        ListenAndServe() error
+        Shutdown(ctx context.Context) error
+}
+
+func NewApp(logger logger, addr string) *app {
+        <span class="cov8" title="1">a := &amp;app{
+                logger: logger,
+                addr:   addr,
+</span>        }
+
+        <span class="cov8" title="1">s := &amp;http.Server{
+                Addr:              addr,
+                Handler:           a.BuildHandler(),
+                ReadTimeout:       10 * time.Second,
+                ReadHeaderTimeout: 10 * time.Second,
+                WriteTimeout:      10 * time.Second,
+                IdleTimeout:       90 * time.Second,
+</span>        }
+        <span class="cov8" title="1">a.server = s
+        return a
+</span>}
+
+func (a *app) BuildHandler() http.Handler {
+        <span class="cov8" title="1">mux := http.NewServeMux()
+        mux.Handle("GET /health", chain(http.HandlerFunc(a.healthHandler), a.jsonApplicationContentMiddleware))
+        return mux
+</span>}
+
+func chain(h http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
+        <span class="cov8" title="1">for i := len(middlewares) - 1; i &gt;= 0; i-- </span>{
+                <span class="cov8" title="1">h = middlewares[i](h)
+</span>        }
+        <span class="cov8" title="1">return h</span>
+}
+
+func (a *app) Serve() {
+        // make cancellation
+        <span class="cov0" title="0">signalCtx, signalCleanup := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+        defer signalCleanup()
+</span>
+        // idempotent shutdown
+        <span class="cov0" title="0">var oneShutdown sync.Once
+        shutdown := func() </span>{
+                <span class="cov0" title="0">oneShutdown.Do(
+                        func() </span>{
+                                <span class="cov0" title="0">timeoutCtx, timeoutFunc := context.WithTimeout(context.Background(), 30*time.Second)
+                                defer timeoutFunc()
+                                if err := a.server.Shutdown(timeoutCtx); err != nil </span>{
+                                        <span class="cov0" title="0">a.logger.LogAttrs(
+                                                timeoutCtx, slog.LevelError, "error shutdown",
+                                                slog.String("caller", "internal.app.Serve"),
+                                                slog.Any("error", err),
+                                        )
+</span>                                }
+                                <span class="cov0" title="0">a.logger.LogAttrs(
+                                        timeoutCtx, slog.LevelInfo, "graceful shutdown complete",
+                                        slog.String("caller", "internal.app.Serve"),
+                                )</span>
+                        },
+                )
+        }
+
+        <span class="cov0" title="0">var wg sync.WaitGroup
+        a.logger.LogAttrs(
+                context.Background(), slog.LevelInfo, "starting server",
+                slog.String("caller", "internal.app.Serve"),
+                slog.String("addr", a.addr),
+        )
+        wg.Add(1)
+        go func() </span>{
+                <span class="cov0" title="0">defer wg.Done()
+                if err := a.server.ListenAndServe(); err != nil &amp;&amp; !errors.Is(err, http.ErrServerClosed) </span>{
+                        <span class="cov0" title="0">a.logger.LogAttrs(
+                                context.Background(), slog.LevelError, "Serve failed",
+                                slog.String("caller", "internal.app.Serve"),
+                                slog.Any("error", err),
+                        )
+                        shutdown()
+</span>                }
+        }()
+
+        <span class="cov0" title="0">&lt;-signalCtx.Done()
+        a.logger.LogAttrs(
+                context.Background(), slog.LevelInfo, "shutting down",
+                slog.String("caller", "internal.        app.Serve"),
+        )
+        shutdown()
+</span>        // allow server goroutine to complete
+        <span class="cov0" title="0">wg.Wait()</span>
+}
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package main
+
+import (
+        "log/slog"
+        "os"
+
+        "github.com/charliemcelfresh/envoy-charlie/internal"
+)
+
+const serverAddr = "localhost:8080"
+
+func main() {
+        <span class="cov0" title="0">handler := slog.NewJSONHandler(
+                os.Stdout, &amp;slog.HandlerOptions{
+                        Level: slog.LevelInfo,
+                },
+        )
+</span>
+        <span class="cov0" title="0">logger := slog.New(handler).With(
+                slog.String("service-name", "envoy-charlie"),
+                slog.String("environment", "production"),
+        )
+</span>
+        <span class="cov0" title="0">slog.SetDefault(logger)
+</span>
+        <span class="cov0" title="0">slog.Info("server started")
+</span>
+        <span class="cov0" title="0">a := internal.NewApp(logger, serverAddr)
+        a.Serve()
+</span>}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
