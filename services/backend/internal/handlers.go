@@ -11,6 +11,10 @@ func (a *app) healthHandler(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 	}
 	w.Header().Set("Content-Type", "application/json")
+	a.logger.LogAttrs(
+		r.Context(), slog.LevelInfo, "info working",
+		slog.String("caller", "internal.healthHandler"),
+	)
 	err := json.NewEncoder(w).Encode(m)
 	if err != nil {
 		a.logger.LogAttrs(

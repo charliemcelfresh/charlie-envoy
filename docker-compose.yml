@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: ./services/backend
+      dockerfile: Dockerfile
+    image: backend:latest
+    container_name: backend
+    ports:
+      - "8080:8080"
+      - "2345:2345"
+    networks:
+      - app-net
+
+  envoy:
+    build:
+      context: ./services/envoy
+      dockerfile: Dockerfile
+    image: envoy-charlie:latest
+    container_name: envoy-charlie
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge

@@ -1,0 +1,197 @@
+static_resources:
+  listeners:
+    - name: listener_0
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+
+                # --- Request ID -----------------------------------------
+                # Envoy generates an x-request-id (UUID) per request by
+                # default and forwards it upstream. always_set_request_id_
+                # in_response also echoes it back to the client, useful for
+                # correlating a user's bug report with your logs/traces.
+                generate_request_id: true
+                preserve_external_request_id: false   # false = always mint our own, ignore any client-supplied one
+                always_set_request_id_in_response: true
+
+                # --- Access logging (structured JSON to stdout) ----------
+                # Plain stdout so Datadog's container log collection picks
+                # it up with no extra config on the Envoy side. Fields
+                # chosen to be directly useful for correlating with APM.
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                      log_format:
+                        json_format:
+                          time: "%START_TIME%"
+                          request_id: "%REQ(X-REQUEST-ID)%"
+                          method: "%REQ(:METHOD)%"
+                          path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+                          authority: "%REQ(:AUTHORITY)%"
+                          forwarded_host: "%REQ(X-FORWARDED-HOST)%"   # remove if you're not using this header
+                          upstream_cluster: "%UPSTREAM_CLUSTER%"
+                          response_code: "%RESPONSE_CODE%"
+                          duration_ms: "%DURATION%"
+                          jwt_sub: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:jwt_payload:sub)%"
+                          user_id: "%REQ(X-USER-ID)%"
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]   # matching happens per-route below, via x-forwarded-host
+                      routes:
+                        # Route on the header CloudFront actually gives you,
+                        # not :authority/Host (which CloudFront may have
+                        # rewritten to its own origin domain).
+                        # Add one match block per distinct host you serve;
+                        # order matters — first match wins.
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-forwarded-host
+                                string_match: { exact: "app.example.com" }   # TODO
+                          route:
+                            cluster: backend_service
+                        # Fallback if no x-forwarded-host match — reject
+                        # rather than silently routing somewhere wrong.
+                        - match: { prefix: "/" }
+                          direct_response:
+                            status: 421
+                            body: { inline_string: "unrecognized host" }
+
+                http_filters:
+                  # --- JWT validation --------------------------------------
+                  # Validates signature, expiry, issuer, audience against a
+                  # JWKS endpoint natively — no network call per request.
+                  # If you need authorization beyond "is this JWT valid"
+                  # (revocation checks, DB-backed permissions), swap this
+                  # for ext_authz instead (or in front of it) and do the
+                  # JWT check inside your auth service.
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      providers:
+                        user_jwt:
+                          issuer: "https://your-issuer.example.com/"   # TODO
+                          audiences: ["your-api-audience"]              # TODO
+                          remote_jwks:
+                            http_uri:
+                              uri: "https://your-issuer.example.com/.well-known/jwks.json"  # TODO
+                              cluster: jwks_service
+                              timeout: 2s
+                            cache_duration: 300s
+                          # Surfaces claims (e.g. "sub") into dynamic metadata
+                          # so the access log line above can include them.
+                          payload_in_metadata: jwt_payload
+                          # Also copy specific claims into plain headers.
+                          # ext_authz (below) sees these automatically, since
+                          # it runs after jwt_authn and ext_authz's
+                          # CheckRequest includes whatever headers are on the
+                          # request at that point in the filter chain — so
+                          # your authz service gets the user's identity
+                          # without needing to decode the JWT itself.
+                          claim_to_headers:
+                            - header_name: x-user-id
+                              claim_name: sub
+                            - header_name: x-user-email
+                              claim_name: email
+                      rules:
+                        - match: { prefix: "/" }
+                          requires:
+                            provider_name: user_jwt
+
+                  # --- Authorization: does this user have permission for
+                  # this specific request? Runs AFTER jwt_authn, so it only
+                  # ever sees requests with an already-validated JWT, and
+                  # receives x-user-id/x-user-email (set above) to look up
+                  # against your permission tables — no need to re-parse
+                  # the token in your authz service.
+                  - name: envoy.filters.http.ext_authz
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                      transport_api_version: V3
+                      grpc_service:
+                        envoy_grpc:
+                          cluster_name: ext_authz_service
+                        timeout: 0.5s
+                      # Fail closed: if the authz service is unreachable,
+                      # deny rather than let an unchecked request through.
+                      failure_mode_allow: false
+
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    # Your existing backend(s) — untouched, however they already talk to
+    # each other behind this. Add more clusters/routes if you have multiple
+    # user-facing services to front.
+    - name: backend_service
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: backend_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: backend.internal   # TODO: your real backend host
+                      port_value: 8000             # TODO: your real backend port
+
+    # JWKS endpoint used by jwt_authn to fetch/refresh public signing keys.
+    - name: jwks_service
+      connect_timeout: 2s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          sni: your-issuer.example.com   # TODO: match your issuer host
+      load_assignment:
+        cluster_name: jwks_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: your-issuer.example.com   # TODO
+                      port_value: 443
+
+    # The authorization service — receives x-user-id (from jwt_authn's
+    # claim_to_headers) and looks up permissions against your DB tables.
+    - name: ext_authz_service
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}   # required: ext_authz's gRPC service needs HTTP/2 upstream
+      load_assignment:
+        cluster_name: ext_authz_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: auth.internal       # TODO: your real authz service host
+                      port_value: 9000              # TODO: your real authz service port
+
+admin:
+  address:
+    socket_address:
+      address: 127.0.0.1
+      port_value: 9901

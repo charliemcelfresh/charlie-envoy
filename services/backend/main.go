@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/charliemcelfresh/envoy-charlie/internal"
+	"github.com/charliemcelfresh/envoy-charlie/services/backend/internal"
 )
 
-const serverAddr = "localhost:8080"
+const serverAddr = "0.0.0.0:8080"
 
 func main() {
 	handler := slog.NewJSONHandler(
